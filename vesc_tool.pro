@@ -4,6 +4,9 @@
 #
 #-------------------------------------------------
 
+# Resolve SDK Path
+QMAKE_MAC_SDK = macosx10.13
+
 # Version
 VT_VERSION = 0.84
 VT_INTRO_VERSION = 1
