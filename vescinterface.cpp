@@ -23,6 +23,7 @@
 #include <QFileInfo>
 #include <QThread>
 #include <QEventLoop>
+#include <utility.h>
 
 #ifdef HAS_SERIALPORT
 #include <QSerialPortInfo>
@@ -39,6 +40,7 @@ VescInterface::VescInterface(QObject *parent) : QObject(parent)
     // Compatible firmwares
     mFwVersionReceived = false;
     mFwRetries = 0;
+    mFwPollCnt = 0;
     mFwTxt = "x.x";
     mIsUploadingFw = false;
 
@@ -78,6 +80,22 @@ VescInterface::VescInterface(QObject *parent) : QObject(parent)
     connect(mTcpSocket, SIGNAL(error(QAbstractSocket::SocketError)),
             this, SLOT(tcpInputError(QAbstractSocket::SocketError)));
 
+    // BLE
+#ifdef HAS_BLUETOOTH
+    mBleUart = new BleUart(this);
+
+    int size = mSettings.beginReadArray("bleNames");
+    for (int i = 0; i < size; ++i) {
+        mSettings.setArrayIndex(i);
+        QString address = mSettings.value("address").toString();
+        QString name = mSettings.value("name").toString();
+        mBleNames.insert(address, name);
+    }
+    mSettings.endArray();
+
+    connect(mBleUart, SIGNAL(dataRx(QByteArray)), this, SLOT(bleDataRx(QByteArray)));
+#endif
+
     mCommands->setAppConfig(mAppConfig);
     mCommands->setMcConfig(mMcConfig);
 
@@ -94,6 +112,23 @@ VescInterface::VescInterface(QObject *parent) : QObject(parent)
     connect(mCommands, SIGNAL(ackReceived(QString)), this, SLOT(ackReceived(QString)));
     connect(mMcConfig, SIGNAL(updated()), this, SLOT(mcconfUpdated()));
     connect(mAppConfig, SIGNAL(updated()), this, SLOT(appconfUpdated()));
+}
+
+VescInterface::~VescInterface()
+{
+    mSettings.beginWriteArray("bleNames");
+
+    QHashIterator<QString, QString> i(mBleNames);
+    int ind = 0;
+    while (i.hasNext()) {
+        i.next();
+        mSettings.setArrayIndex(ind);
+        mSettings.setValue("address", i.key());
+        mSettings.setValue("name", i.value());
+        ind++;
+    }
+
+    mSettings.endArray();
 }
 
 Commands *VescInterface::commands() const
@@ -158,10 +193,36 @@ void VescInterface::emitStatusMessage(const QString &msg, bool isGood)
     emit statusMessage(msg, isGood);
 }
 
+void VescInterface::emitMessageDialog(const QString &title, const QString &msg, bool isGood, bool richText)
+{
+    emit messageDialog(title, msg, isGood, richText);
+}
+
 bool VescInterface::fwRx()
 {
     return mFwVersionReceived;
 }
+
+#ifdef HAS_BLUETOOTH
+BleUart *VescInterface::bleDevice()
+{
+    return mBleUart;
+}
+
+void VescInterface::storeBleName(QString address, QString name)
+{
+    mBleNames.insert(address, name);
+}
+
+QString VescInterface::getBleName(QString address)
+{
+    QString res;
+    if(mBleNames.contains(address)) {
+        res = mBleNames[address];
+    }
+    return res;
+}
+#endif
 
 bool VescInterface::isPortConnected()
 {
@@ -176,6 +237,12 @@ bool VescInterface::isPortConnected()
     if (mTcpConnected) {
         res = true;
     }
+
+#ifdef HAS_BLUETOOTH
+    if (mBleUart->isConnected()) {
+        res = true;
+    }
+#endif
 
     return res;
 }
@@ -194,6 +261,13 @@ void VescInterface::disconnectPort()
         updateFwRx(false);
     }
 
+#ifdef HAS_BLUETOOTH
+    if (mBleUart->isConnected()) {
+        mBleUart->disconnectBle();
+        updateFwRx(false);
+    }
+#endif
+
     mFwRetries = 0;
 }
 
@@ -208,20 +282,25 @@ bool VescInterface::reconnectLastPort()
     } else if (mLastConnType == CONN_TCP) {
         connectTcp(mLastTcpServer, mLastTcpPort);
         return true;
+    } else if (mLastConnType == CONN_BLE) {
+#ifdef HAS_BLUETOOTH
+        mBleUart->startConnect(mLastBleAddr);
+#endif
+        return true;
     } else {
 #ifdef HAS_SERIALPORT
         QList<VSerialInfo_t> ports = listSerialPorts();
         if (!ports.isEmpty()) {
             return connectSerial(ports.first().systemPath);
         } else  {
-            emit messageDialog(tr("Reconnect"), tr("No ports found"), false);
+            emit messageDialog(tr("Reconnect"), tr("No ports found"), false, false);
             return false;
         }
 #else
         emit messageDialog(tr("Reconnect"),
                            tr("Please specify the connection manually "
                               "the first time you are connecting."),
-                           false);
+                           false, false);
         return false;
 #endif
     }
@@ -293,6 +372,13 @@ QString VescInterface::getConnectedPortName()
         connected = true;
     }
 
+#ifdef HAS_BLUETOOTH
+    if (mBleUart->isConnected()) {
+        res = tr("Connected (BLE) to %1").arg(mLastBleAddr);
+        connected = true;
+    }
+#endif
+
     if (connected && mCommands->isLimitedMode()) {
         res += tr(", limited mode");
     }
@@ -363,7 +449,7 @@ bool VescInterface::connectSerial(QString port, int baudrate)
     emit messageDialog(tr("Connect serial"),
                        tr("Serial port support is not enabled in this build "
                           "of VESC Tool."),
-                       false);
+                       false, false);
     return false;
 #endif
 }
@@ -416,6 +502,17 @@ void VescInterface::connectTcp(QString server, int port)
 
     mTcpSocket->abort();
     mTcpSocket->connectToHost(host, port);
+}
+
+void VescInterface::connectBle(QString address)
+{
+#ifdef HAS_BLUETOOTH
+    mBleUart->startConnect(address);
+    mLastConnType = CONN_BLE;
+    mLastBleAddr = address;
+#else
+    (void)address;
+#endif
 }
 
 bool VescInterface::isAutoconnectOngoing() const
@@ -489,6 +586,13 @@ void VescInterface::tcpInputError(QAbstractSocket::SocketError socketError)
     updateFwRx(false);
 }
 
+#ifdef HAS_BLUETOOTH
+void VescInterface::bleDataRx(QByteArray data)
+{
+    mPacket->processData(data);
+}
+#endif
+
 void VescInterface::timerSlot()
 {
     // Poll the serial port as well since readyRead is not emitted recursively. This
@@ -505,21 +609,24 @@ void VescInterface::timerSlot()
             mFwRetries = 0;
         }
 
-        if (!mFwVersionReceived) {
-            mCommands->getFwVersion();
-            mFwRetries++;
+        mFwPollCnt++;
+        if (mFwPollCnt >= 4) {
+            mFwPollCnt = 0;
+            if (!mFwVersionReceived) {
+                mCommands->getFwVersion();
+                mFwRetries++;
 
-            // Timeout if the firmware cannot be read
-            if (mFwRetries >= 100) {
-                emit statusMessage(tr("No firmware read response"), false);
-                emit messageDialog(tr("Read Firmware Version"),
-                                   tr("Could not read firmware version. Make sure "
-                                      "that selected port really belongs to the VESC. "),
-                                   false);
-                disconnectPort();
+                // Timeout if the firmware cannot be read
+                if (mFwRetries >= 25) {
+                    emit statusMessage(tr("No firmware read response"), false);
+                    emit messageDialog(tr("Read Firmware Version"),
+                                       tr("Could not read firmware version. Make sure "
+                                          "that selected port really belongs to the VESC. "),
+                                       false, false);
+                    disconnectPort();
+                }
             }
         }
-
     } else {
         updateFwRx(false);
         mFwRetries = 0;
@@ -564,6 +671,12 @@ void VescInterface::packetDataToSend(QByteArray &data)
     if (mTcpConnected && mTcpSocket->isOpen()) {
         mTcpSocket->write(data);
     }
+
+#ifdef HAS_BLUETOOTH
+    if (mBleUart->isConnected()) {
+        mBleUart->writeData(data);
+    }
+#endif
 }
 
 void VescInterface::packetReceived(QByteArray &data)
@@ -580,19 +693,14 @@ void VescInterface::fwVersionReceived(int major, int minor, QString hw, QByteArr
 {
     QList<QPair<int, int> > fwPairs = getSupportedFirmwarePairs();
 
-    QString strUuid;
-    for (int i = 0;i < uuid.size();i++) {
-        QString str = QString::number(uuid.at(i), 16).
-                rightJustified(2, '0').toUpper();
-        strUuid.append((i == 0 ? "" : " ") + str);
-    }
+    QString strUuid = Utility::uuid2Str(uuid, true);
 
     if (fwPairs.isEmpty()) {
         emit messageDialog(tr("No Supported Firmwares"),
                            tr("This version of VESC Tool does not seem to have any supported "
                               "firmwares. Something is probably wrong with the motor configuration "
                               "file."),
-                           false);
+                           false, false);
         updateFwRx(false);
         mFwRetries = 0;
         disconnectPort();
@@ -610,7 +718,7 @@ void VescInterface::fwVersionReceived(int major, int minor, QString hw, QByteArr
         mFwRetries = 0;
         disconnectPort();
         emit messageDialog(tr("Error"), tr("The firmware on the connected VESC is too old. Please"
-                                           " update it using a programmer."), false);
+                                           " update it using a programmer."), false, false);
     } else if (fw_connected > highest_supported) {
         mCommands->setLimitedMode(true);
         updateFwRx(true);
@@ -620,7 +728,7 @@ void VescInterface::fwVersionReceived(int major, int minor, QString hw, QByteArr
                                                 " Tool to the latest version. Alternatively, the firmware on"
                                                 " the connected VESC can be downgraded in the firmware page."
                                                 " Until then, limited communication mode will be used where"
-                                                " only the firmware can be changed."), false);
+                                                " only the firmware can be changed."), false, false);
         }
     } else if (!fwPairs.contains(fw_connected)) {
         if (fw_connected >= qMakePair(1, 1)) {
@@ -631,7 +739,7 @@ void VescInterface::fwVersionReceived(int major, int minor, QString hw, QByteArr
                                                     " connected VESC has firmware with bootloader support, it can be"
                                                     " updated from the Firmware page."
                                                     " Until then, limited communication mode will be used where only the"
-                                                    " firmware can be changed."), false);
+                                                    " firmware can be changed."), false, false);
             }
         } else {
             updateFwRx(false);
@@ -639,7 +747,7 @@ void VescInterface::fwVersionReceived(int major, int minor, QString hw, QByteArr
             disconnectPort();
             if (!wasReceived) {
                 emit messageDialog(tr("Error"), tr("The firmware on the connected VESC is too old. Please"
-                                                   " update it using a programmer."), false);
+                                                   " update it using a programmer."), false, false);
             }
         }
     } else {
@@ -647,7 +755,7 @@ void VescInterface::fwVersionReceived(int major, int minor, QString hw, QByteArr
         if (fw_connected < highest_supported) {
             if (!wasReceived) {
                 emit messageDialog(tr("Warning"), tr("The connected VESC has compatible, but old"
-                                                    " firmware. It is recommended that you update it."), false);
+                                                    " firmware. It is recommended that you update it."), false, false);
             }
         }
 

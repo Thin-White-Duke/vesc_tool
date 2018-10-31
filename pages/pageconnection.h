@@ -41,6 +41,7 @@ public:
 
 private slots:
     void timerSlot();
+    void bleScanDone(QVariantMap devs, bool done);
 
     void on_serialRefreshButton_clicked();
     void on_serialDisconnectButton_clicked();
@@ -51,6 +52,10 @@ private slots:
     void on_helpButton_clicked();
     void on_canFwdButton_toggled(bool checked);
     void on_autoConnectButton_clicked();
+    void on_bleScanButton_clicked();
+    void on_bleDisconnectButton_clicked();
+    void on_bleConnectButton_clicked();
+    void on_bleSetNameButton_clicked();
 
 private:
     Ui::PageConnection *ui;

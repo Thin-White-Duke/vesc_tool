@@ -68,7 +68,7 @@ public:
 private slots:
     void timerSlot();
     void showStatusInfo(QString info, bool isGood);
-    void showMessageDialog(const QString &title, const QString &msg, bool isGood);
+    void showMessageDialog(const QString &title, const QString &msg, bool isGood, bool richText);
     void serialPortNotWritable(const QString &port);
     void valuesReceived(MC_VALUES values);
     void paramChangedDouble(QObject *src, QString name, double newParam);
@@ -120,6 +120,8 @@ private slots:
     void on_actionFirmwareChangelog_triggered();
     void on_actionVESCProjectForums_triggered();
     void on_actionLicense_triggered();
+    void on_posBox_editingFinished();
+    void on_posBox_valueChanged(double arg1);
 
 private:
     Ui::MainWindow *ui;

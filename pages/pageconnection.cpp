@@ -20,7 +20,7 @@
 #include "pageconnection.h"
 #include "ui_pageconnection.h"
 #include "widgets/helpdialog.h"
-#include "util.h"
+#include "utility.h"
 #include <QMessageBox>
 
 PageConnection::PageConnection(QWidget *parent) :
@@ -51,6 +51,12 @@ VescInterface *PageConnection::vesc() const
 void PageConnection::setVesc(VescInterface *vesc)
 {
     mVesc = vesc;
+
+#ifdef HAS_BLUETOOTH
+    connect(mVesc->bleDevice(), SIGNAL(scanDone(QVariantMap,bool)),
+            this, SLOT(bleScanDone(QVariantMap,bool)));
+#endif
+
     on_serialRefreshButton_clicked();
 }
 
@@ -66,7 +72,54 @@ void PageConnection::timerSlot()
         if (ui->canFwdButton->isChecked() != mVesc->commands()->getSendCan()) {
             ui->canFwdButton->setChecked(mVesc->commands()->getSendCan());
         }
+
+        if (ui->canFwdBox->value() != mVesc->commands()->getCanSendId()) {
+            ui->canFwdBox->setValue(mVesc->commands()->getCanSendId());;
+        }
     }
+}
+
+void PageConnection::bleScanDone(QVariantMap devs, bool done)
+{
+#ifdef HAS_BLUETOOTH
+    if (done) {
+        ui->bleScanButton->setEnabled(true);
+    }
+
+    ui->bleDevBox->clear();
+    for (auto d: devs.keys()) {
+        QString devName = devs.value(d).toString();
+        QString addr = d;
+        QString setName = mVesc->getBleName(addr);
+
+        if (!setName.isEmpty()) {
+            QString name;
+            name += setName;
+            name += " [";
+            name += addr;
+            name += "]";
+            ui->bleDevBox->insertItem(0, name, addr);
+        } else if (devName.contains("VESC")) {
+            QString name;
+            name += devName;
+            name += " [";
+            name += addr;
+            name += "]";
+            ui->bleDevBox->insertItem(0, name, addr);
+        } else {
+            QString name;
+            name += devName;
+            name += " [";
+            name += addr;
+            name += "]";
+            ui->bleDevBox->addItem(name, addr);
+        }
+    }
+    ui->bleDevBox->setCurrentIndex(0);
+#else
+    (void)devs;
+    (void)done;
+#endif
 }
 
 void PageConnection::on_serialRefreshButton_clicked()
@@ -78,8 +131,6 @@ void PageConnection::on_serialRefreshButton_clicked()
             ui->serialPortBox->addItem(port.name, port.systemPath);
         }
         ui->serialPortBox->setCurrentIndex(0);
-
-        on_canFwdBox_valueChanged(ui->canFwdBox->value());
     }
 }
 
@@ -135,5 +186,51 @@ void PageConnection::on_canFwdButton_toggled(bool checked)
 
 void PageConnection::on_autoConnectButton_clicked()
 {
-    util::autoconnectBlockingWithProgress(mVesc, this);
+    Utility::autoconnectBlockingWithProgress(mVesc, this);
+}
+
+void PageConnection::on_bleScanButton_clicked()
+{
+#ifdef HAS_BLUETOOTH
+    if (mVesc) {
+        mVesc->bleDevice()->startScan();
+        ui->bleScanButton->setEnabled(false);
+    }
+#endif
+}
+
+void PageConnection::on_bleDisconnectButton_clicked()
+{
+    if (mVesc) {
+        mVesc->disconnectPort();
+    }
+}
+
+void PageConnection::on_bleConnectButton_clicked()
+{
+    if (mVesc) {
+        if (ui->bleDevBox->count() > 0) {
+            mVesc->connectBle(ui->bleDevBox->currentData().toString());
+        }
+    }
+}
+
+void PageConnection::on_bleSetNameButton_clicked()
+{
+#ifdef HAS_BLUETOOTH
+    if (mVesc) {
+        QString name = ui->bleNameEdit->text();
+        QString addr = ui->bleDevBox->currentData().toString();
+
+        if (!name.isEmpty()) {
+            mVesc->storeBleName(addr, name);
+            name += " [";
+            name += addr;
+            name += "]";
+            ui->bleDevBox->removeItem(0);
+            ui->bleDevBox->insertItem(0, name, addr);
+            ui->bleDevBox->setCurrentIndex(0);
+        }
+    }
+#endif
 }

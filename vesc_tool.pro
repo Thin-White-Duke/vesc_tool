@@ -8,7 +8,7 @@
 QMAKE_MAC_SDK = macosx10.13
 
 # Version
-VT_VERSION = 0.84
+VT_VERSION = 0.95
 VT_INTRO_VERSION = 1
 
 DEFINES += VT_VERSION=$$VT_VERSION
@@ -16,6 +16,9 @@ DEFINES += VT_INTRO_VERSION=$$VT_INTRO_VERSION
 
 # Serial port available
 DEFINES += HAS_SERIALPORT
+
+# Bluetooth available
+DEFINES += HAS_BLUETOOTH
 
 # Options
 #CONFIG += build_original
@@ -25,17 +28,31 @@ DEFINES += HAS_SERIALPORT
 #CONFIG += build_bronze
 #CONFIG += build_free
 
+# Build mobile GUI
+#CONFIG += build_mobile
+
+#CONFIG += qtquickcompiler
+
 QT       += core gui
+QT       += widgets
 QT       += printsupport
 QT       += network
+QT       += quick
+QT       += quickcontrols2
 
 contains(DEFINES, HAS_SERIALPORT) {
     QT       += serialport
 }
 
-greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
+contains(DEFINES, HAS_BLUETOOTH) {
+    QT       += bluetooth
+}
 
-TARGET = vesc_tool_$$VT_VERSION
+android: QT += androidextras
+
+android: TARGET = vesc_tool
+!android: TARGET = vesc_tool_$$VT_VERSION
+
 TEMPLATE = app
 
 release_win {
@@ -57,6 +74,18 @@ release_lin {
     UI_DIR = build/lin/obj
 }
 
+release_android {
+    DESTDIR = build/android
+    OBJECTS_DIR = build/android/obj
+    MOC_DIR = build/android/obj
+    RCC_DIR = build/android/obj
+    UI_DIR = build/android/obj
+}
+
+build_mobile {
+    DEFINES += USE_MOBILE
+}
+
 SOURCES += main.cpp\
         mainwindow.cpp \
     packet.cpp \
@@ -69,8 +98,8 @@ SOURCES += main.cpp\
     digitalfiltering.cpp \
     setupwizardapp.cpp \
     setupwizardmotor.cpp \
-    util.cpp \
-    startupwizard.cpp
+    startupwizard.cpp \
+    utility.cpp
 
 HEADERS  += mainwindow.h \
     packet.h \
@@ -84,14 +113,20 @@ HEADERS  += mainwindow.h \
     digitalfiltering.h \
     setupwizardapp.h \
     setupwizardmotor.h \
-    util.h \
-    startupwizard.h
+    startupwizard.h \
+    utility.h
 
 FORMS    += mainwindow.ui \
     parametereditor.ui
 
+contains(DEFINES, HAS_BLUETOOTH) {
+    SOURCES += bleuart.cpp
+    HEADERS += bleuart.h
+}
+
 include(pages/pages.pri)
 include(widgets/widgets.pri)
+include(mobile/mobile.pri)
 
 RESOURCES += res.qrc
 
@@ -124,3 +159,13 @@ build_original {
     res_fw.qrc
     DEFINES += VER_NEUTRAL
 }
+
+DISTFILES += \
+    android/AndroidManifest.xml \
+    android/gradle/wrapper/gradle-wrapper.jar \
+    android/gradlew \
+    android/res/values/libs.xml \
+    android/build.gradle \
+    android/gradle/wrapper/gradle-wrapper.properties
+
+ANDROID_PACKAGE_SOURCE_DIR = $$PWD/android

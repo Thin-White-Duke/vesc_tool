@@ -20,6 +20,7 @@
 #include "pagefirmware.h"
 #include "ui_pagefirmware.h"
 #include "widgets/helpdialog.h"
+#include "utility.h"
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QDirIterator>
@@ -93,10 +94,25 @@ void PageFirmware::fwUploadStatus(const QString &status, double progress, bool i
 
 void PageFirmware::fwVersionReceived(int major, int minor, QString hw, QByteArray uuid)
 {
-    (void)major;
-    (void)minor;
-    (void)uuid;
-    ui->currentLabel->setText(mVesc->getFirmwareNow());
+    QString fwStr;
+    QString strUuid = Utility::uuid2Str(uuid, true);
+
+    if (!strUuid.isEmpty()) {
+        fwStr += ", UUID: " + strUuid;
+    }
+
+    if (major >= 0) {
+        fwStr.sprintf("Fw: %d.%d", major, minor);
+        if (!hw.isEmpty()) {
+            fwStr += ", Hw: " + hw;
+        }
+
+        if (!strUuid.isEmpty()) {
+            fwStr += "\n" + strUuid;
+        }
+    }
+
+    ui->currentLabel->setText(fwStr);
     updateHwList(hw);
     updateBlList(hw);
     update();
@@ -180,6 +196,16 @@ void PageFirmware::updateBlList(QString hw)
         }
     }
 
+    if (ui->blList->count() == 0) {
+        QFileInfo generic("://res/bootloaders/generic.bin");
+        if (generic.exists()) {
+            QListWidgetItem *item = new QListWidgetItem;
+            item->setText("generic");
+            item->setData(Qt::UserRole, generic.absoluteFilePath());
+            ui->blList->insertItem(ui->blList->count(), item);
+        }
+    }
+
     if (ui->blList->count() > 0) {
         ui->blList->setCurrentRow(0);
     }
@@ -238,7 +264,7 @@ void PageFirmware::on_uploadButton_clicked()
                     || !fileInfo.fileName().endsWith(".bin")) {
                 QMessageBox::critical(this,
                                       tr("Upload Error"),
-                                      tr("The selected file name seems invalid."));
+                                      tr("The selected file name seems to be invalid."));
                 return;
             }
         } else {
@@ -335,8 +361,5 @@ void PageFirmware::on_cancelButton_clicked()
 
 void PageFirmware::on_changelogButton_clicked()
 {
-    QFile cl("://res/firmwares/CHANGELOG");
-    if (cl.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        HelpDialog::showHelp(this, "Firmware Changelog", QString::fromUtf8(cl.readAll()));
-    }
+    HelpDialog::showHelp(this, "Firmware Changelog", Utility::fwChangeLog());
 }
